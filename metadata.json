@@ -1,0 +1,8 @@
+{
+  "requestFramePermissions": [
+    "microphone",
+    "display-capture"
+  ],
+  "name": "Venture-OS",
+  "description": ""
+}
