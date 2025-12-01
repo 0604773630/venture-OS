@@ -355,10 +355,10 @@
                         </div>
                     </div>
                     <div class="flex gap-3">
-                        <button onclick="handleExport()" class="px-3 py-1.5 text-xs text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white border border-slate-200 dark:border-white/10 rounded hover:bg-slate-100 dark:hover:bg-white/5 transition-colors flex items-center gap-2">
+                        <button onclick="handleExport('contracts')" class="px-3 py-1.5 text-xs text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white border border-slate-200 dark:border-white/10 rounded hover:bg-slate-100 dark:hover:bg-white/5 transition-colors flex items-center gap-2">
                             <i class="fa-solid fa-file-contract"></i> Generate Contracts
                         </button>
-                        <button onclick="handleExport()" class="px-3 py-1.5 text-xs text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white border border-slate-200 dark:border-white/10 rounded hover:bg-slate-100 dark:hover:bg-white/5 transition-colors flex items-center gap-2">
+                        <button onclick="handleExport('pdf')" class="px-3 py-1.5 text-xs text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white border border-slate-200 dark:border-white/10 rounded hover:bg-slate-100 dark:hover:bg-white/5 transition-colors flex items-center gap-2">
                             <i class="fa-solid fa-download"></i> Export PDF
                         </button>
                     </div>
@@ -628,8 +628,20 @@
     <script type="module">
         import { GoogleGenAI, Type } from "@google/genai";
 
-        // Initialize Gemini securely - process.env.API_KEY is injected at build time
-        const apiKey = process.env.API_KEY;
+        // Initialize Gemini securely
+        // SAFEGUARD: Check if process is defined (for browser/GitHub compatibility)
+        const getApiKey = () => {
+            try {
+                if (typeof process !== "undefined" && process.env) {
+                    return process.env.API_KEY;
+                }
+            } catch (e) {
+                console.warn("Environment variables not accessible. If you are running this on GitHub Pages, you must manually configure the API key in the code.");
+            }
+            return ""; // Return empty string if not found, forcing a manual key entry or error later
+        };
+        
+        const apiKey = getApiKey();
         const ai = new GoogleGenAI({ apiKey });
 
         // --- GLOBAL STATE ---
@@ -638,6 +650,7 @@
         let audioChunks = [];
         let selectedImageSize = '1K';
         let isDarkMode = true;
+        let pendingExportType = null;
         
         // Expose functions to window
         window.switchView = switchView;
@@ -774,6 +787,12 @@
         async function handleInitiate() {
             const input = document.getElementById('idea-input').value;
             if(!input) return;
+            
+            // Check for API Key validity
+            if (!apiKey || apiKey === "") {
+                alert("API Key is missing. If you are hosting this statically (e.g., GitHub Pages), you need to manually configure the API key in the source code or use a local development environment.");
+                return;
+            }
 
             const btn = document.getElementById('btn-initiate');
             const txt = document.getElementById('btn-text');
@@ -797,8 +816,8 @@
                             items: {
                                 type: Type.OBJECT,
                                 properties: {
-                                    name: { type: Type.STRING, description: "Tier name e.g. Starter" },
-                                    price: { type: Type.STRING, description: "e.g. $29/mo" },
+                                    name: { type: Type.STRING, description: "Tier name e.g. Hustler" },
+                                    price: { type: Type.STRING, description: "Price in ZAR e.g. R499" },
                                     features: { type: Type.ARRAY, items: { type: Type.STRING } }
                                 }
                             }
@@ -820,15 +839,16 @@
 
                 const response = await ai.models.generateContent({
                     model: 'gemini-3-pro-preview',
-                    contents: `You are Venture-OS, a world-class startup architect. Analyze this idea and generate a complete architecture with a detailed roadmap and pricing strategy: "${input}". 
+                    contents: `You are Venture-OS, a world-class startup architect for the South African market. Analyze this idea and generate a complete architecture with a detailed roadmap and pricing strategy: "${input}". 
                     Create a sophisticated, realistic business plan, a 3-tier pricing strategy, and technical identity. The roadmap must be complete and comprehensive.
                     
                     For the Pricing Plan:
-                    - Create a Deserving Subscription Fee model.
-                    - Ensure the prices are Reasonable for the services offered by this specific startup idea.
-                    - Tier 1: Entry/Hobbyist.
-                    - Tier 2: Professional/Growth (Recommended).
-                    - Tier 3: Enterprise/Scale.
+                    - Create a Deserving Subscription Fee model tailored for South Africa (ZAR).
+                    - Ensure the prices are Reasonable (e.g., R199 for Starter, R499 for Pro, R1499 for Enterprise).
+                    - Use 'R' symbol for pricing.
+                    - Tier 1: Hustler (Entry level).
+                    - Tier 2: Founder (Growth level - Recommended).
+                    - Tier 3: Empire (Scale level).
                     `,
                     config: {
                         responseMimeType: "application/json",
@@ -839,6 +859,10 @@
 
                 const data = JSON.parse(response.text);
                 
+                // Initialize arrays if missing to prevent map errors
+                if (!data.pricing_plan) data.pricing_plan = [];
+                if (!data.roadmap) data.roadmap = [];
+
                 // SAVE TO HISTORY
                 saveProjectToHistory(data);
                 
@@ -848,7 +872,7 @@
 
             } catch (error) {
                 console.error("Gemini Error:", error);
-                alert("Architecture generation failed. Please try again.");
+                alert("Architecture generation failed. Please check console for details.");
             } finally {
                 btn.disabled = false;
                 txt.innerText = "INITIATE";
@@ -857,97 +881,122 @@
         }
 
         function unlockDashboard() {
-            const data = JSON.parse(localStorage.getItem('venture_data') || '{}');
-            const docContent = document.getElementById('doc-content');
+            try {
+                const data = JSON.parse(localStorage.getItem('venture_data') || '{}');
+                const docContent = document.getElementById('doc-content');
 
-            // Set Project Name & Styles
-            if(data.project_name) {
-                document.getElementById('project-name').innerText = data.project_name;
-                document.getElementById('builder-project-name').innerText = data.project_name;
-                document.getElementById('config-app-name').value = data.project_name;
-            }
-            if (data.primary_color) {
-                 updatePreviewColor(data.primary_color);
-                 document.getElementById('config-color').value = data.primary_color;
-                 document.getElementById('config-color-text').value = data.primary_color;
-            }
+                // Set Project Name & Styles
+                if(data.project_name) {
+                    document.getElementById('project-name').innerText = data.project_name;
+                    document.getElementById('builder-project-name').innerText = data.project_name;
+                    document.getElementById('config-app-name').value = data.project_name;
+                }
+                if (data.primary_color) {
+                     updatePreviewColor(data.primary_color);
+                     document.getElementById('config-color').value = data.primary_color;
+                     document.getElementById('config-color-text').value = data.primary_color;
+                }
 
-            // Set Business Plan
-            if(data.business_plan) {
-                const formatted = data.business_plan
-                    .replace(/^# (.*$)/gim, '<h1 class="text-2xl font-bold text-slate-900 dark:text-white mt-6 mb-4">$1</h1>')
-                    .replace(/^## (.*$)/gim, '<h2 class="text-xl font-bold text-slate-800 dark:text-white mt-5 mb-3">$1</h2>')
-                    .replace(/^### (.*$)/gim, '<h3 class="text-lg font-bold text-slate-700 dark:text-slate-200 mt-4 mb-2">$1</h3>')
-                    .replace(/\*\*(.*)\*\*/gim, '<b class="text-slate-900 dark:text-slate-200">$1</b>')
-                    .replace(/\n/gim, '<br>');
+                // Set Business Plan
+                if(data.business_plan) {
+                    const formatted = data.business_plan
+                        .replace(/^# (.*$)/gim, '<h1 class="text-2xl font-bold text-slate-900 dark:text-white mt-6 mb-4">$1</h1>')
+                        .replace(/^## (.*$)/gim, '<h2 class="text-xl font-bold text-slate-800 dark:text-white mt-5 mb-3">$1</h2>')
+                        .replace(/^### (.*$)/gim, '<h3 class="text-lg font-bold text-slate-700 dark:text-slate-200 mt-4 mb-2">$1</h3>')
+                        .replace(/\*\*(.*)\*\*/gim, '<b class="text-slate-900 dark:text-slate-200">$1</b>')
+                        .replace(/\n/gim, '<br>');
+                    
+                    docContent.innerHTML = formatted;
+                }
                 
-                docContent.innerHTML = formatted;
-            }
-            
-            // Render Pricing Plan
-            if (data.pricing_plan) {
+                // Fallback for existing projects that lack pricing data (Ensures UI always shows)
+                const pricing = (data.pricing_plan && data.pricing_plan.length > 0) ? data.pricing_plan : [
+                    { name: "Hustler", price: "R199", features: ["Basic Business Plan", "1 User", "Email Support"] },
+                    { name: "Founder", price: "R499", features: ["Complete Architecture", "5 Users", "Priority Support", "Export to PDF"] },
+                    { name: "Empire", price: "R1,499", features: ["White Label", "Unlimited Users", "24/7 Concierge", "API Access"] }
+                ];
+
+                // Render Pricing Plan (South African Context)
                 const priceContainerHtml = `
                     <div class="mt-12 border-t border-slate-200 dark:border-white/10 pt-8">
-                        <h3 class="text-xl font-bold text-slate-900 dark:text-white mb-6">Strategic Pricing Model</h3>
-                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            ${data.pricing_plan.map((plan, i) => `
-                                <div class="relative bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl p-6 flex flex-col hover:border-cyan-500/50 transition-colors ${i === 1 ? 'ring-1 ring-cyan-500/30' : ''}">
-                                    ${i === 1 ? '<div class="absolute -top-3 left-1/2 -translate-x-1/2 bg-cyan-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide">Recommended</div>' : ''}
-                                    <h4 class="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest mb-2">${plan.name}</h4>
-                                    <div class="text-3xl font-bold text-slate-900 dark:text-white mb-6">${plan.price}</div>
-                                    <ul class="space-y-3 mb-6 flex-1">
-                                        ${plan.features.map(f => `
-                                            <li class="flex gap-2 text-xs text-slate-600 dark:text-slate-300">
-                                                <i class="fa-solid fa-check text-cyan-500 mt-0.5"></i> <span>${f}</span>
+                        <div class="flex items-center gap-3 mb-6">
+                            <div class="w-8 h-8 rounded-lg bg-green-500/10 flex items-center justify-center text-green-500">
+                                <i class="fa-solid fa-money-bill-wave"></i>
+                            </div>
+                            <div>
+                                <h3 class="text-xl font-bold text-slate-900 dark:text-white">Subscription Strategy</h3>
+                                <p class="text-xs text-slate-500 dark:text-slate-400">Monthly ZAR (South African Rand)</p>
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                            ${pricing.map((plan, i) => `
+                                <div class="relative bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl p-6 flex flex-col hover:border-cyan-500/50 hover:shadow-lg transition-all group ${i === 1 ? 'ring-2 ring-cyan-500 shadow-cyan-500/10 z-10 scale-105' : 'opacity-90 hover:opacity-100'}">
+                                    ${i === 1 ? '<div class="absolute -top-3 left-1/2 -translate-x-1/2 bg-cyan-500 text-white text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-wide shadow-md">Recommended</div>' : ''}
+                                    <div class="mb-4">
+                                        <h4 class="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest mb-1">${plan.name}</h4>
+                                        <div class="text-3xl font-bold text-slate-900 dark:text-white flex items-baseline gap-1">
+                                            ${plan.price} <span class="text-sm font-normal text-slate-500">/mo</span>
+                                        </div>
+                                    </div>
+                                    <div class="h-px bg-slate-100 dark:bg-white/10 w-full mb-4"></div>
+                                    <ul class="space-y-3 mb-8 flex-1">
+                                        ${(plan.features || []).map(f => `
+                                            <li class="flex gap-3 text-xs text-slate-600 dark:text-slate-300">
+                                                <i class="fa-solid fa-check text-cyan-500 mt-0.5"></i> <span class="leading-relaxed">${f}</span>
                                             </li>
                                         `).join('')}
                                     </ul>
-                                    <button class="w-full py-2 rounded-lg bg-slate-100 dark:bg-white/10 hover:bg-cyan-500 hover:text-white text-slate-900 dark:text-white text-xs font-bold transition-colors">Select Plan</button>
+                                    <button class="w-full py-2.5 rounded-lg bg-slate-100 dark:bg-white/10 hover:bg-cyan-500 hover:text-white text-slate-900 dark:text-white text-xs font-bold transition-colors uppercase tracking-wide">
+                                        Choose ${plan.name}
+                                    </button>
                                 </div>
                             `).join('')}
                         </div>
                     </div>
                 `;
                 docContent.insertAdjacentHTML('beforeend', priceContainerHtml);
-            }
 
-            // Render Roadmap
-            if (data.roadmap) {
-                const container = document.getElementById('roadmap-container');
-                container.innerHTML = '';
-                
-                data.roadmap.forEach((phase, index) => {
-                    const html = `
-                        <div class="relative pl-8 pb-12 border-l border-slate-200 dark:border-white/10 last:border-0">
-                            <div class="absolute -left-[13px] top-0 w-6 h-6 rounded-full bg-slate-100 dark:bg-space-900 border-2 border-cyan-500 flex items-center justify-center text-[10px] font-bold text-cyan-500">
-                                ${index + 1}
-                            </div>
-                            <div class="bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl p-6 shadow-sm">
-                                <div class="flex justify-between items-start mb-4">
-                                    <div>
-                                        <h3 class="text-lg font-bold text-slate-900 dark:text-white">${phase.phase}</h3>
-                                        <span class="text-xs text-cyan-600 dark:text-cyan-400 font-mono uppercase">${phase.timeline}</span>
-                                    </div>
-                                    <div class="w-8 h-8 rounded-lg bg-slate-100 dark:bg-white/5 flex items-center justify-center text-slate-400">
-                                        <i class="fa-solid fa-check"></i>
-                                    </div>
+                // Render Roadmap
+                if (data.roadmap) {
+                    const container = document.getElementById('roadmap-container');
+                    container.innerHTML = '';
+                    
+                    data.roadmap.forEach((phase, index) => {
+                        const html = `
+                            <div class="relative pl-8 pb-12 border-l border-slate-200 dark:border-white/10 last:border-0">
+                                <div class="absolute -left-[13px] top-0 w-6 h-6 rounded-full bg-slate-100 dark:bg-space-900 border-2 border-cyan-500 flex items-center justify-center text-[10px] font-bold text-cyan-500">
+                                    ${index + 1}
                                 </div>
-                                <ul class="space-y-2">
-                                    ${phase.tasks.map(task => `
-                                        <li class="flex gap-3 text-sm text-slate-600 dark:text-slate-300">
-                                            <span class="mt-1.5 w-1.5 h-1.5 rounded-full bg-slate-300 dark:bg-slate-600 flex-shrink-0"></span>
-                                            ${task}
-                                        </li>
-                                    `).join('')}
-                                </ul>
+                                <div class="bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl p-6 shadow-sm">
+                                    <div class="flex justify-between items-start mb-4">
+                                        <div>
+                                            <h3 class="text-lg font-bold text-slate-900 dark:text-white">${phase.phase}</h3>
+                                            <span class="text-xs text-cyan-600 dark:text-cyan-400 font-mono uppercase">${phase.timeline}</span>
+                                        </div>
+                                        <div class="w-8 h-8 rounded-lg bg-slate-100 dark:bg-white/5 flex items-center justify-center text-slate-400">
+                                            <i class="fa-solid fa-check"></i>
+                                        </div>
+                                    </div>
+                                    <ul class="space-y-2">
+                                        ${(phase.tasks || []).map(task => `
+                                            <li class="flex gap-3 text-sm text-slate-600 dark:text-slate-300">
+                                                <span class="mt-1.5 w-1.5 h-1.5 rounded-full bg-slate-300 dark:bg-slate-600 flex-shrink-0"></span>
+                                                ${task}
+                                            </li>
+                                        `).join('')}
+                                    </ul>
+                                </div>
                             </div>
-                        </div>
-                    `;
-                    container.insertAdjacentHTML('beforeend', html);
-                });
+                        `;
+                        container.insertAdjacentHTML('beforeend', html);
+                    });
+                }
+                
+                switchView('strategist');
+            } catch (e) {
+                console.error("Dashboard Unlock Error:", e);
+                alert("Failed to render dashboard layout.");
             }
-            
-            switchView('strategist');
         }
 
         function updatePreviewColor(color) {
@@ -1138,7 +1187,7 @@
             }
         }
 
-        // --- 4. IMAGE GENERATION (Pro Image) ---
+        // --- 4. IMAGE GENERATION (Flash Image - No Config) ---
         function openImageModal() {
             document.getElementById('modal-image').classList.remove('hidden');
             document.getElementById('modal-image').classList.add('flex');
@@ -1166,23 +1215,22 @@
             btn.innerHTML = '<div class="loader"></div> Generating...';
 
             try {
+                // switched to gemini-2.5-flash-image to fix 403 error
+                // also removed imageConfig as it is not supported by flash-image
                 const response = await ai.models.generateContent({
-                    model: 'gemini-3-pro-image-preview',
+                    model: 'gemini-2.5-flash-image',
                     contents: {
-                        parts: [{ text: prompt }]
-                    },
-                    config: {
-                        imageConfig: {
-                            imageSize: selectedImageSize
-                        }
+                        parts: [{ text: prompt + ` (${selectedImageSize} resolution style)` }]
                     }
                 });
 
                 let imageUrl = null;
-                for (const part of response.candidates[0].content.parts) {
-                    if (part.inlineData) {
-                        imageUrl = `data:image/png;base64,${part.inlineData.data}`;
-                        break;
+                if (response.candidates && response.candidates[0].content && response.candidates[0].content.parts) {
+                    for (const part of response.candidates[0].content.parts) {
+                        if (part.inlineData) {
+                            imageUrl = `data:image/png;base64,${part.inlineData.data}`;
+                            break;
+                        }
                     }
                 }
 
@@ -1196,6 +1244,8 @@
                     
                     closeImageModal();
                     switchView('builder');
+                } else {
+                    alert("No image generated.");
                 }
 
             } catch (e) {
@@ -1234,9 +1284,72 @@
             }
         }
 
-        function handleExport() {
-            document.getElementById('modal-license').classList.remove('hidden');
-            document.getElementById('modal-license').classList.add('flex');
+        function handleExport(type) {
+            if (localStorage.getItem('venture_auth') === 'true') {
+                 // Trigger real download
+                 const data = JSON.parse(localStorage.getItem('venture_data') || '{}');
+                 let content = "";
+                 let filename = "venture-os-export.txt";
+
+                 if(type === 'contracts') {
+                    content = `
+LEGAL CONTRACTS PACK
+Generated by Venture-OS
+Date: ${new Date().toLocaleDateString()}
+Project: ${data.project_name || 'Untitled'}
+
+==================================================
+1. NON-DISCLOSURE AGREEMENT (NDA)
+==================================================
+
+This Non-Disclosure Agreement (the "Agreement") is entered into by and between ${data.project_name} ("Disclosing Party") and the Recipient.
+
+1. Confidential Information
+The Disclosing Party may disclose certain confidential and proprietary information...
+
+[...Standard Boilerplate Content Truncated for Demo...]
+
+==================================================
+2. INDEPENDENT CONTRACTOR AGREEMENT
+==================================================
+
+This Agreement is made between ${data.project_name} and the Contractor...
+                    `;
+                    filename = "contracts_pack.txt";
+                 } else {
+                    content = `
+${data.project_name ? data.project_name.toUpperCase() : 'BUSINESS PLAN'}
+==================================================
+
+${data.business_plan || 'No business plan generated.'}
+
+==================================================
+EXECUTION ROADMAP
+==================================================
+
+${(data.roadmap || []).map(r => `[${r.phase} - ${r.timeline}]\n${r.tasks.map(t => `- ${t}`).join('\n')}`).join('\n\n')}
+
+==================================================
+PRICING STRATEGY
+==================================================
+
+${(data.pricing_plan || []).map(p => `${p.name}: ${p.price}\nFeatures: ${p.features.join(', ')}`).join('\n\n')}
+                    `;
+                    filename = "business-plan.md";
+                 }
+
+                 const blob = new Blob([content], { type: 'text/plain' });
+                 const url = window.URL.createObjectURL(blob);
+                 const a = document.createElement('a');
+                 a.href = url;
+                 a.download = filename;
+                 a.click();
+                 window.URL.revokeObjectURL(url);
+            } else {
+                pendingExportType = type;
+                document.getElementById('modal-license').classList.remove('hidden');
+                document.getElementById('modal-license').classList.add('flex');
+            }
         }
         function closeLicenseModal() {
             document.getElementById('modal-license').classList.add('hidden');
@@ -1247,6 +1360,11 @@
                 localStorage.setItem('venture_auth', 'true');
                 closeLicenseModal();
                 alert("Premium Features Unlocked.");
+                // Resume export if pending
+                if(pendingExportType) {
+                    handleExport(pendingExportType);
+                    pendingExportType = null;
+                }
             } else {
                 document.getElementById('key-error').classList.remove('hidden');
             }
@@ -1257,7 +1375,4 @@
                 location.reload();
             }
         }
-    </script>
-<script type="module" src="/index.tsx"></script>
-</body>
-</html>
+    </script><script type="module" src="/index.tsx"></script>
