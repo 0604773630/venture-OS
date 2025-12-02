@@ -1,7 +1,2 @@
-import React from 'react';
-import { createRoot } from 'react-dom/client';
-import App from './App';
-
-const container = document.getElementById('root');
-const root = createRoot(container!);
-root.render(<App />);
+// React application disabled in favor of Vanilla JS Venture-OS dashboard.
+console.log("Venture-OS: React entry point disabled.");

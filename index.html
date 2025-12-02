@@ -629,20 +629,37 @@
         import { GoogleGenAI, Type } from "@google/genai";
 
         // Initialize Gemini securely
-        // SAFEGUARD: Check if process is defined (for browser/GitHub compatibility)
+        // SAFEGUARD: Check if process is defined (for browser/GitHub/Vercel compatibility)
+        // If hosting statically, process.env is usually not available in the browser.
+        // You can paste your API key below in MANUAL_API_KEY if needed.
+        const MANUAL_API_KEY = ""; 
+
         const getApiKey = () => {
+            if (MANUAL_API_KEY) return MANUAL_API_KEY;
+
+            // 1. Check Vite/Vercel Environment Variables (Priority)
             try {
-                if (typeof process !== "undefined" && process.env) {
+                if (import.meta.env && import.meta.env.VITE_GEMINI_API_KEY) {
+                    return import.meta.env.VITE_GEMINI_API_KEY;
+                }
+            } catch (e) {
+                // import.meta might not be available in all contexts
+            }
+
+            // 2. Check Process Environment Variables (Legacy/Local)
+            try {
+                if (typeof process !== "undefined" && process.env && process.env.API_KEY) {
                     return process.env.API_KEY;
                 }
             } catch (e) {
-                console.warn("Environment variables not accessible. If you are running this on GitHub Pages, you must manually configure the API key in the code.");
+                console.warn("Environment variables not accessible. If you are running this on Vercel/GitHub Pages statically, you must manually configure the API key in the source code or use a local development environment.");
             }
-            return ""; // Return empty string if not found, forcing a manual key entry or error later
+            return ""; 
         };
         
         const apiKey = getApiKey();
-        const ai = new GoogleGenAI({ apiKey });
+        // Only init AI if key is present to prevent immediate crash
+        const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
 
         // --- GLOBAL STATE ---
         let currentView = 'lobby';
@@ -790,7 +807,7 @@
             
             // Check for API Key validity
             if (!apiKey || apiKey === "") {
-                alert("API Key is missing. If you are hosting this statically (e.g., GitHub Pages), you need to manually configure the API key in the source code or use a local development environment.");
+                alert("API Key is missing. Since you are hosting this statically on Vercel, the app cannot access environment variables. Please edit the index.html file and paste your API Key into the 'MANUAL_API_KEY' constant near the bottom of the script.");
                 return;
             }
 
@@ -837,9 +854,7 @@
                     required: ["project_name", "business_plan", "tagline", "primary_color", "pricing_plan", "roadmap"]
                 };
 
-                const response = await ai.models.generateContent({
-                    model: 'gemini-3-pro-preview',
-                    contents: `You are Venture-OS, a world-class startup architect for the South African market. Analyze this idea and generate a complete architecture with a detailed roadmap and pricing strategy: "${input}". 
+                const systemPrompt = `You are Venture-OS, a world-class startup architect for the South African market. Analyze this idea and generate a complete architecture with a detailed roadmap and pricing strategy: "${input}". 
                     Create a sophisticated, realistic business plan, a 3-tier pricing strategy, and technical identity. The roadmap must be complete and comprehensive.
                     
                     For the Pricing Plan:
@@ -849,15 +864,44 @@
                     - Tier 1: Hustler (Entry level).
                     - Tier 2: Founder (Growth level - Recommended).
                     - Tier 3: Empire (Scale level).
-                    `,
-                    config: {
-                        responseMimeType: "application/json",
-                        responseSchema: schema,
-                        thinkingConfig: { thinkingBudget: 32768 }
-                    }
-                });
+                    `;
 
-                const data = JSON.parse(response.text);
+                let response;
+                let data;
+
+                // ATTEMPT 1: Try Gemini 3 Pro (Thinking Model)
+                try {
+                    console.log("Attempting generation with gemini-3-pro-preview...");
+                    response = await ai.models.generateContent({
+                        model: 'gemini-3-pro-preview',
+                        contents: systemPrompt,
+                        config: {
+                            responseMimeType: "application/json",
+                            responseSchema: schema,
+                            thinkingConfig: { thinkingBudget: 16000 }
+                        }
+                    });
+                    data = JSON.parse(response.text);
+                } catch (proError) {
+                    console.warn("Gemini 3 Pro failed. Fallback to Flash initiated.", proError);
+                    
+                    // ATTEMPT 2: Fallback to Gemini 2.5 Flash (Faster, no thinking)
+                    try {
+                        txt.innerText = "RETRYING...";
+                         response = await ai.models.generateContent({
+                            model: 'gemini-2.5-flash',
+                            contents: systemPrompt,
+                            config: {
+                                responseMimeType: "application/json",
+                                responseSchema: schema
+                            }
+                        });
+                        data = JSON.parse(response.text);
+                    } catch (flashError) {
+                        // If both fail, throw the original error to alert user
+                         throw new Error(`Model Generation Failed. Pro Error: ${proError.message}. Flash Error: ${flashError.message}`);
+                    }
+                }
                 
                 // Initialize arrays if missing to prevent map errors
                 if (!data.pricing_plan) data.pricing_plan = [];
@@ -871,8 +915,8 @@
                 unlockDashboard();
 
             } catch (error) {
-                console.error("Gemini Error:", error);
-                alert("Architecture generation failed. Please check console for details.");
+                console.error("Gemini Critical Error:", error);
+                alert(`Architecture generation failed.\n\nReason: ${error.message}\n\nTip: Check if your API Key has access to 'gemini-3-pro-preview' or 'gemini-2.5-flash' in Google AI Studio.`);
             } finally {
                 btn.disabled = false;
                 txt.innerText = "INITIATE";
@@ -910,6 +954,7 @@
                 }
                 
                 // Fallback for existing projects that lack pricing data (Ensures UI always shows)
+                // Using South African ZAR defaults
                 const pricing = (data.pricing_plan && data.pricing_plan.length > 0) ? data.pricing_plan : [
                     { name: "Hustler", price: "R199", features: ["Basic Business Plan", "1 User", "Email Support"] },
                     { name: "Founder", price: "R499", features: ["Complete Architecture", "5 Users", "Priority Support", "Export to PDF"] },
@@ -924,8 +969,8 @@
                                 <i class="fa-solid fa-money-bill-wave"></i>
                             </div>
                             <div>
-                                <h3 class="text-xl font-bold text-slate-900 dark:text-white">Subscription Strategy</h3>
-                                <p class="text-xs text-slate-500 dark:text-slate-400">Monthly ZAR (South African Rand)</p>
+                                <h3 class="text-xl font-bold text-slate-900 dark:text-white">Subscription Strategy (ZAR)</h3>
+                                <p class="text-xs text-slate-500 dark:text-slate-400">Monthly Pricing Model</p>
                             </div>
                         </div>
                         <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -1375,4 +1420,7 @@ ${(data.pricing_plan || []).map(p => `${p.name}: ${p.price}\nFeatures: ${p.featu
                 location.reload();
             }
         }
-    </script><script type="module" src="/index.tsx"></script>
+    </script>
+<script type="module" src="/index.tsx"></script>
+</body>
+</html>
